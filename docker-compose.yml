@@ -1,0 +1,112 @@
+services:
+  docker-socket-setup:
+    image: alpine
+    container_name: docker_socket_permission
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    entrypoint: sh
+    command:
+      - -c
+      - |
+        chmod 666 /var/run/docker.sock
+
+  postgres_airflow:
+    image: postgres:16
+    container_name: postgres_airflow
+    environment:
+      POSTGRES_USER: rrkts_airflow
+      POSTGRES_PASSWORD: rrkts_airflow
+      POSTGRES_DB: rrkts_airflow
+    restart: unless-stopped
+    networks:
+      - network_test
+    ports:
+      - 5431:5432
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "rrkts_airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    depends_on:
+      docker-socket-setup:
+        condition: service_completed_successfully
+
+  webserver:
+    build: .
+    container_name: airflow-webserver
+    restart: always
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://rrkts_airflow:rrkts_airflow@postgres_airflow/rrkts_airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=mysecretkey
+      - AIRFLOW__CORE__FERNET_KEY=GgyJ5jUehSy2zQqY958eUWW1ezEgNp4OerBy-AKuD14=
+      - AIRFLOW__WEBSERVER__WEB_SERVER_PORT=9443
+      - AIRFLOW__WEBSERVER__EXPOSE_CONFIG=True
+      - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
+      - AIRFLOW__WEBSERVER__WEB_SERVER_HOST=0.0.0.0
+      - AIRFLOW__WEBSERVER__ENABLE_PROXY_FIX=True
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=30
+      - AIRFLOW__SCHEDULER__PRINT_STATS_INTERVAL=30
+      - AIRFLOW__WEBSERVER__RELOAD_ON_PLUGIN_CHANGE=True
+      - AIRFLOW__WEBSERVER__WORKERS=2
+      - AIRFLOW__WEBSERVER__WORKER_TIMEOUT=120
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_BATCH_SIZE=1
+      - AIRFLOW__WEBSERVER__WORKER_REFRESH_INTERVAL=6000
+      - GUNICORN_CMD_ARGS=--timeout 120 --workers 2
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/host_dags
+    volumes:
+      - /home/odl_user_1656969/airflow/dags:/opt/airflow/host_dags:rw,z
+      - ./logs:/opt/airflow/logs:rw,z
+      - ./certs:/opt/airflow/certs:rw,z
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    ports:
+      - "9443:7443"
+    #healthcheck:
+      #test: ["CMD", "curl", "--fail", "--insecure", "https://172.18.0.7:9443/health"]
+      #interval: 30s
+      #timeout: 10s
+      #retries: 5
+    networks:
+      - network_test
+    user: rrkts_airflow
+    command: webserver
+    depends_on:
+      postgres_airflow:
+        condition: service_healthy
+
+  scheduler:
+    build: .
+    container_name: airflow-scheduler
+    restart: always
+    environment:
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://rrkts_airflow:rrkts_airflow@postgres_airflow/rrkts_airflow
+      - AIRFLOW__WEBSERVER__SECRET_KEY=mysecretkey
+      - AIRFLOW__CORE__FERNET_KEY=GgyJ5jUehSy2zQqY958eUWW1ezEgNp4OerBy-AKuD14=
+      - AIRFLOW__LOGGING__LOGGING_LEVEL=INFO
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False
+      - AIRFLOW__SCHEDULER__DAG_DIR_LIST_INTERVAL=30
+      - AIRFLOW__SCHEDULER__PRINT_STATS_INTERVAL=30
+      - AIRFLOW__CORE__DAGS_FOLDER=/opt/airflow/host_dags
+    volumes:
+      - /home/odl_user_1656969/airflow/dags:/opt/airflow/host_dags:rw,z
+      - ./logs:/opt/airflow/logs:rw,z
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+    networks:
+      - network_test
+    healthcheck:
+      test: ["CMD", "airflow", "jobs", "check", "--job-type", "SchedulerJob"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    user: rrkts_airflow
+    command: scheduler
+    depends_on:
+      webserver:
+        condition: service_started
+
+networks:
+  network_test:
+    name: network_test
+    external: true
